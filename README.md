@@ -15,4 +15,4 @@
 
 ### Who do I talk to? ###
 
-* Repo owner or admin: candiduslynx (candiduslynx@gmail.com)
+* Repo owner: candiduslynx (candiduslynx@gmail.com)
