@@ -1,0 +1,224 @@
+#pragma runopts(POSIX(ON),ENVAR("__POSIX_SYSTEM=NO"))
+#ifndef _OPEN_THREADS
+#define _OPEN_THREADS
+#endif
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <sys/__messag.h>
+#include <errno.h>
+#include "JobList.h"
+
+char *JCLLib;
+JobListPtr Jobs;
+unsigned char WaitFlag;
+
+unsigned char ExecFlag;
+#define ExecFlag_Pause (unsigned char) 0x01
+#define ExecFlag_Stop  (unsigned char) 0x02
+
+pthread_mutex_t ExecFlag_Mutex, Wait_Mutex;
+
+void *WaitToExec(void *arg)
+{
+    time_t end, t;
+    double left;
+
+    pthread_mutex_lock(&Wait_Mutex);             /* lock Wait mutex */
+    WaitFlag = 1;
+    end = *(time_t *) arg;
+    time(&t);                                    /* Get curr time */
+    left = difftime(end, t);                     /* Count time to sleep */
+    left = (left < 0) ? 0 : left;                /* If < 0 -> set to zero */
+    sleep((int)left);                            /* wait */
+
+    pthread_mutex_unlock(&Wait_Mutex);           /* unlock Wait mutex */
+
+    pthread_exit(NULL);
+}
+
+void Exec()
+{
+    JobListPtr jPtr;
+    pthread_t t1, t2;
+    void *ret1;
+    unsigned char tmp;
+
+    pthread_mutex_lock(&ExecFlag_Mutex);
+    tmp = ExecFlag;
+    pthread_mutex_unlock(&ExecFlag_Mutex);
+
+    while(!(tmp & (ExecFlag_Stop | ExecFlag_Pause)) && Jobs != NULL)
+    {
+        jPtr = JobTake(&Jobs);
+
+        WaitFlag = 0;
+        pthread_create(&t1, NULL, WaitToExec, &(jPtr->NextExecTime));
+        while(WaitFlag==0)
+            sleep(1);
+        while (pthread_mutex_trylock(&Wait_Mutex) != 0)
+        {
+            pthread_mutex_lock(&ExecFlag_Mutex);
+            tmp = ExecFlag;
+            pthread_mutex_unlock(&ExecFlag_Mutex);
+            if (tmp & (ExecFlag_Stop | ExecFlag_Pause))
+            {
+                pthread_cancel(t1);
+                pthread_join(t1, &ret1);
+                pthread_mutex_unlock(&Wait_Mutex);          /* unlock Wait mutex */
+                return;
+            }
+            else
+            {
+                sleep(1);
+            }
+        }
+        pthread_join(t1, &ret1);
+        pthread_mutex_unlock(&Wait_Mutex);
+        pthread_mutex_lock(&ExecFlag_Mutex);
+        tmp = ExecFlag;
+        pthread_mutex_unlock(&ExecFlag_Mutex);
+        if (!(tmp & (ExecFlag_Stop | ExecFlag_Pause)))
+        {
+            JobExec(&jPtr, JCLLib);
+            JobInsert(&Jobs,&jPtr);
+        }
+        pthread_mutex_lock(&ExecFlag_Mutex);
+        tmp = ExecFlag;
+        pthread_mutex_unlock(&ExecFlag_Mutex);
+    }
+}
+
+void *WaitForCommand(void *arg)
+{
+    int rc;
+    char buf[256];
+    int cmsg_cmd = 0;
+    unsigned char tmp;
+
+    pthread_mutex_lock(&ExecFlag_Mutex);
+    tmp = ExecFlag;
+    pthread_mutex_unlock(&ExecFlag_Mutex);
+
+    while (!(tmp & ExecFlag_Stop))
+    {
+        rc = __console(NULL, buf,&cmsg_cmd);
+        if (cmsg_cmd == _CC_stop)
+        {
+            pthread_mutex_lock(&ExecFlag_Mutex);
+            ExecFlag = ExecFlag | ExecFlag_Stop;
+            pthread_mutex_unlock(&ExecFlag_Mutex);
+            printf("Will end work\n");
+        }
+        else
+        {
+            if (strcmp(buf, "REFRESH") == 0)
+            {
+                pthread_mutex_lock(&ExecFlag_Mutex);
+                ExecFlag = ExecFlag | ExecFlag_Pause;
+                pthread_mutex_unlock(&ExecFlag_Mutex);
+                printf("Will refresh parms\n");
+            }
+        }
+        pthread_mutex_lock(&ExecFlag_Mutex);
+        tmp = ExecFlag;
+        pthread_mutex_unlock(&ExecFlag_Mutex);
+    }
+    pthread_exit(NULL);
+}
+
+void init()
+{
+    FILE *sysin;
+    JobListPtr jPtr;
+    time_t curr;
+    struct tm curr_tm;
+    unsigned int x, startH, delD, delH, delM, intD, intH, intM, temp;
+    char s[200], jname[9];
+    strcpy(s,"");
+    strcpy(jname,"        ");
+
+    Jobs = NULL;
+    jPtr = NULL;
+
+    time(&curr);
+    curr_tm = *localtime(&curr);
+
+    sysin = fopen("DD:SYSIN", "rb, type=record");
+    if (sysin == NULL)
+    {
+        printf("Failed to open 'DD:SYSIN'\n");
+        return;
+    }
+    x = fread(s, 1, sizeof(s), sysin);
+    while (x != 0)
+    {
+        if(sscanf(s,"%s %3d:%2d:%2d %3d:%2d:%2d", &jname, &delD, &delH, &delM, &intD, &intH, &intM) == 7)
+        {
+            printf("Add a JOB: %-8s %03d:%02d:%02d %03d:%02d:%02d\n", jname, delD, delH, delM, intD, intH, intM);
+            jPtr = NewJobList(jname, (((delD*24) + delH)*60 + delM)*60, (((intD*24) + intH)*60 + intM)*60);
+            JobInsert(&Jobs,&jPtr);
+        }
+        x = fread(s, 1, sizeof(s), sysin);
+    }
+    fclose(sysin);
+    pthread_mutex_lock(&ExecFlag_Mutex);
+    ExecFlag = ExecFlag - ExecFlag_Pause;
+    pthread_mutex_unlock(&ExecFlag_Mutex);
+}
+
+void *ExecuteJobs(void *arg)
+{
+    unsigned char tmp;
+
+    pthread_mutex_lock(&ExecFlag_Mutex);
+    tmp = ExecFlag;
+    pthread_mutex_unlock(&ExecFlag_Mutex);
+
+    while (!(tmp & ExecFlag_Stop))
+    {
+        pthread_mutex_lock(&ExecFlag_Mutex);
+        tmp = ExecFlag;
+        pthread_mutex_unlock(&ExecFlag_Mutex);
+
+        if (tmp & ExecFlag_Pause)
+        {
+            init();
+        }
+        Exec();
+    }
+    pthread_exit(NULL);
+}
+
+int main(int argc, char **argv)
+{
+    pthread_t t1,t2;
+    void *ret1, *ret2;
+
+    JCLLib = (char *)malloc(45);
+    if (argc < 2)
+    {
+        printf("You need to specify JCLLib as a PARM.\n");
+    }
+    else
+    {
+        strcpy(JCLLib,*(argv+1));
+        printf("JCLLIB = '%s'\n",JCLLib);
+    }
+
+    ExecFlag = ExecFlag_Pause;
+
+    pthread_mutex_init(&Wait_Mutex, NULL);
+    pthread_mutex_init(&ExecFlag_Mutex, NULL);
+    pthread_create(&t1, NULL, ExecuteJobs, "");
+    pthread_create(&t2, NULL, WaitForCommand, "");
+    pthread_join(t1, &ret1);
+    pthread_join(t2, &ret2);
+    pthread_mutex_destroy(&Wait_Mutex);
+    pthread_mutex_destroy(&ExecFlag_Mutex);
+
+    printf("Work finished\n");
+
+    return 0;
+}

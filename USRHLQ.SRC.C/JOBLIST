@@ -1,0 +1,93 @@
+#include "JobList.h"
+
+    /* This func will obtain space for JobList object and init its values */
+JobListPtr NewJobList(char *JName, unsigned int JExecDelay, unsigned int JExecInterval)
+{
+    JobListPtr res;
+    time_t temp;
+    time(&temp);
+    res = (JobListPtr)malloc(JobListSize);       /* Get space */
+    strcpy(res->JobName, JName);                 /* Copy JobName */
+    res->ExecInterval = JExecInterval;           /* Copy interval */
+    res->NextExecTime = temp + JExecDelay;       /* Set exec time */
+    res->next = NULL;                            /* Set pointer to NULL */
+    return res;
+}
+
+    /* This func will insert JobList object into JobList List */
+JobListPtr JobInsert(JobListPtr *c, JobListPtr *Job)
+{
+    if (*c == NULL)                              /* If no list exists */
+    {
+        *c = *Job;                               /* The list must consist of only Job */
+    }
+    else                                         /* otherwise */
+    {
+        if ((*c)->NextExecTime <= (*Job)->NextExecTime) /* if curr job has to be executed before Job */
+        {
+              (*c)->next = JobInsert(&((*c)->next), Job); /* Insert Job further */
+        }
+        else                                     /* else */
+        {
+             (*Job)->next = *c;                  /* Update */
+             *c = *Job;                          /*        current list head */
+        }
+    }
+    return *c;
+}
+
+    /* This func will take head of JobList List and return it to us. Also, the <real> head will be changed */
+JobListPtr JobTake(JobListPtr *c)
+{
+    JobListPtr res;
+    unsigned int CurrInt;
+    res = *c;                                    /* Get ptr to the head */
+    *c = (*c)->next;                             /* Move head */
+    res->next = NULL;                            /* Edit ptr in res */
+    return res;                                  /* return */
+}
+
+    /* This func will execute a job pointed to by JobList object and update NextExecTime */
+void       JobExec(JobListPtr *Job, char *JCLLib)
+{
+    char sub[100];
+    char prt[200];
+    struct tm * curr;
+    double left;
+    time_t t;
+
+    strcpy(sub,"exec 'USRHLQ.SRC.REXX(SUBRC)' '''");
+    strcat(sub,JCLLib);                         /* Create */
+    strcat(sub,"(");                               /* string */
+    strcat(sub,(*Job)->JobName);                      /* to submit */
+    strcat(sub,")'''");
+
+    time(&t);
+    curr = localtime(&t);
+    strftime(prt, 99, "[%e %b %Y, %T]:", curr);
+    printf("%s submit   Job: %s\n", prt, (*Job)->JobName);
+    system(sub);                                 /* submit Job */
+    time(&t);
+    curr = localtime(&t);
+    strftime(prt, 99, "[%e %b %Y, %T]:",curr);
+    printf("%s finished Job: %s\n", prt, (*Job)->JobName);
+
+    (*Job)->NextExecTime += (*Job)->ExecInterval;                        /* set new delay */
+}
+
+    /* This func will free whole Job list */
+void       JobFree(JobListPtr *c)
+{
+    JobListPtr a, b;
+
+    a = NULL;
+    b = NULL;
+
+    a = *c;
+    while (a != NULL)
+    {
+        b = a->next;
+        free(a);
+        a = b;
+    }
+}

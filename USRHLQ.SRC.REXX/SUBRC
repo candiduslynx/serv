@@ -1,0 +1,56 @@
+/*REXX*/
+/* ----- */
+parse upper arg DSNA
+/* ----- */
+TempDS = "'USRHLQ.SRC.REXX(TEMP)'"
+/* ----- */
+RC = Main(DSNA)
+exit
+
+Main:
+parse upper arg Job
+  ADDRESS TSO
+    X=OUTTRAP('A.')
+  ADDRESS TSO
+  "SUBMIT " Job
+  ADDRESS TSO
+    X= OUTTRAP('OFF')
+  J = A.1
+  parse var J 'JOB' JobName '(' JobId ')' BRR JUNK
+  temp = Wait_To_Finish(JobName, JobId)
+return temp
+
+Wait_To_Finish:
+  parse arg JobName, JobId
+  JobId = strip(JobId)
+  l2 = ''
+  do until (l2 = 'ON OUTPUT QUEUE' | l2 = 'NOT FOUND')
+    CALL SYSCALLS('ON')    /*ENABLE USS-CALLS*/
+    ADDRESS SYSCALL
+    "SLEEP" 1                /*SLEEP FOR ?? SECONDS*/
+    CALL SYSCALLS('OFF')
+    ADDRESS TSO
+      X= OUTTRAP(out.)
+      "STATUS "JobName"("JobId")"
+      X= OUTTRAP(OFF)
+    parse var out.1 l1 ")" l2
+  end
+  return 0
+
+Check_RC:
+  parse arg JobName, JobId
+  "ALLOCATE DSNAME("TempDS") SHR F(FINO)"
+  "OUTPUT" JobName"("JobId") PRINT("TempDS")"
+  "EXECIO * DISKR FINO (FINIS STEM FUT."
+  "FREE F(FINO)"
+  i = 1
+  MaxCC = 0
+  do until i > FUT.0
+      parse var FUT.i kkk " " jjj " " ttt " " var2 " RC " var2rc " ET "
+      if (var2 = JobName) & (var2RC \= "0000") then
+      do
+         MaxCC = ABS(var2RC)
+      end
+      i = i+1
+  end
+  return MaxCC

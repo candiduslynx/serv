@@ -1,0 +1,27 @@
+#ifndef _JOBLIST_
+#define _JOBLIST_
+#pragma runopts(POSIX(ON),ENVAR("__POSIX_SYSTEM=NO"))
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+typedef struct _JobList
+{
+   char JobName[9];
+   struct _JobList* next;
+   time_t NextExecTime;
+   unsigned int ExecInterval;
+} JobList, *JobListPtr;
+
+#define JobListSize sizeof(JobList)
+
+JobListPtr NewJobList(char *JName, unsigned int JExecDelay, unsigned int JExecInterval);
+
+JobListPtr JobInsert(JobListPtr *c, JobListPtr *Job);
+
+JobListPtr JobTake(JobListPtr *c);
+
+void       JobExec(JobListPtr *Job, char *JCLLib);
+
+void       JobFree(JobListPtr *c);
+#endif
